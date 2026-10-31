@@ -1,0 +1,132 @@
+html
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>دردشة صوتية</title>
+  <style>
+    body { font-family: sans-serif; max-width: 420px; margin: 60px auto; padding: 0 20px; text-align: center; }
+    input, button { font-size: 18px; padding: 12px; margin: 8px 0; width: 100%; box-sizing: border-box; }
+    button { cursor: pointer; border: 0; border-radius: 8px; background: #2563eb; color: white; }
+    button.leave { background: #dc2626; }
+    button.muted { background: #6b7280; }
+    #room-view { display: none; }
+  </style>
+</head>
+<body>
+  <h1>دردشة صوتية</h1>
+
+  <div id="join-view">
+    <input id="room" placeholder="اسم الغرفة">
+    <button id="join">دخول الغرفة</button>
+  </div>
+
+  <div id="room-view">
+    <p>أنت في الغرفة: <b id="room-name"></b></p>
+    <p>المتصلون معك: <b id="count">0</b></p>
+    <button id="mute" class="muted">كتم الميكروفون</button>
+    <button id="leave" class="leave">مغادرة</button>
+  </div>
+
+  <div id="audio"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    let socket, localStream;
+    const peers = {};
+
+    const $ = (id) => document.getElementById(id);
+    const updateCount = () => ($('count').textContent = Object.keys(peers).length);
+```
+html
+
+    function createPeer(peerId) {
+      const pc = new RTCPeerConnection(ICE);
+      localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit('signal', { to: peerId, data: { candidate: e.candidate } });
+        }
+      };
+
+      pc.ontrack = (e) => {
+        let el = document.getElementById('a-' + peerId);
+        if (!el) {
+          el = document.createElement('audio');
+          el.id = 'a-' + peerId;
+          el.autoplay = true;
+          $('audio').appendChild(el);
+        }
+        el.srcObject = e.streams[0];
+      };
+
+      peers[peerId] = pc;
+      updateCount();
+      return pc;
+    }
+
+    function removePeer(peerId) {
+      peers[peerId]?.close();
+      delete peers[peerId];
+      document.getElementById('a-' + peerId)?.remove();
+      updateCount();
+    }
+```html
+
+    $('join').onclick = async () => {
+      const room = $('room').value.trim();
+      if (!room) return;
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        alert('لم يتم السماح باستخدام الميكروفون');
+        return;
+      }
+
+      socket = io();
+      socket.emit('join', room);
+html
+
+      socket.on('user-joined', async (peerId) => {
+        const pc = createPeer(peerId);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('signal', { to: peerId, data: { sdp: pc.localDescription } });
+      });
+
+      socket.on('signal', async ({ from, data }) => {
+        const pc = peers[from] || createPeer(from);
+        if (data.sdp) {
+          await pc.setRemoteDescription(data.sdp);
+          if (data.sdp.type === 'offer') {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit('signal', { to: from, data: { sdp: pc.localDescription } });
+          }
+        } else if (data.candidate) {
+          await pc.addIceCandidate(data.candidate);
+        }
+      });html
+
+      socket.on('user-left', removePeer);
+
+      $('room-name').textContent = room;
+      $('join-view').style.display = 'none';
+      $('room-view').style.display = 'block';
+    };
+
+    $('mute').onclick = () => {
+      const track = localStream.getAudioTracks()[0];
+      track.enabled = !track.enabled;
+      $('mute').textContent = track.enabled ? 'كتم الميكروفون' : 'إلغاء الكتم';
+    };
+
+    $('leave').onclick = () => location.reload();
+  </script>
+</body>
+</html>
+```
